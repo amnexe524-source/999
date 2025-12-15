@@ -79,7 +79,7 @@ local hitRunHealthThreshold = 600
 local demonKingSafeAnimations = {"idle", "walk", "run", "gethit", "gethit1", "gethit2", "gethit3", "gethit4", "gethit5"}
 local demonKingDangerKeywords = {"attack", "slam", "smash", "skill1", "skill2", "skill3", "skill4", "skill5", "hit1", "hit3", "hit4", "hit5", "hit", "hit2"}
 
--- Boss ปกติ (golem, spider)
+-- Boss ปกติ (golem, spider, ranged orc)
 local bossSafeAnimations = {"idle", "walk", "run", "gethit", "gethit1", "gethit2", "gethit3", "gethit4", "gethit5", "hit", "hit2", "Hit", "Hit2"}
 local bossDangerKeywords = {"skill", "skill1", "skill2", "skill3", "skill4", "skill5"}
 
@@ -87,6 +87,7 @@ local bossRetreatDurationDefault = 3
 local bossRetreatDurationHit = 1
 local bossRetreatDurationSkill = 3
 
+local rangedorcNames = {"ranged orc"}
 local golemNames = {"golem"}
 local spiderNames = {"spider"}
 local demonKingNames = {"demon king", "demonking"}
