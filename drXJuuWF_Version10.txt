@@ -1,0 +1,633 @@
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local TweenService = game:GetService("TweenService")
+local UserInputService = game:GetService("UserInputService")
+local VirtualInputManager = game:GetService("VirtualInputManager")
+
+local player = Players.LocalPlayer
+local character = player.Character or player.CharacterAdded:Wait()
+local humanoidRootPart = character:WaitForChild("HumanoidRootPart")
+local humanoid = character:WaitForChild("Humanoid")
+
+-- ==============================
+-- RAYFIELD UI LIBRARY
+-- ==============================
+local Rayfield = loadstring(game:HttpGet('https://sirius.menu/rayfield'))()
+
+local Window = Rayfield:CreateWindow({
+    Name = "⚡ Anime Final Quest ⚡",
+    LoadingTitle = "Loading Anime Final Quest...",
+    LoadingSubtitle = "Ultimate Auto Farm Script",
+    ConfigurationSaving = {
+        Enabled = true,
+        FolderName = "AnimeFinalQuest",
+        FileName = "Config"
+    },
+    Discord = {
+        Enabled = false,
+        Invite = "noinvitelink",
+        RememberJoins = false
+    },
+    KeySystem = false
+})
+
+local MainTab = Window:CreateTab("⚔️ Main", 4483362458)
+local SkillTab = Window:CreateTab("🔥 Skills", 4483362458)
+local SafetyTab = Window:CreateTab("🛡️ Safety", 4483362458)
+local SettingsTab = Window:CreateTab("⚙️ Settings", 4483362458)
+
+-- ==============================
+-- VARIABLES & CONFIG
+-- ==============================
+local isRunning = false
+local isAutoReplay = false
+local isHitAndRun = false
+local isRetreating = false
+local damageMultiplier = 1
+local isAutoSkill = false
+local selectedSkillKeys = {"1"}
+local isAutoUltimate = false
+local isSafeMode = false
+local safeModeCooldown = false
+
+local currentTarget = nil
+local attackLoop = nil
+local floatConnection = nil
+local hitRunTask = nil
+local animationMonitor = {}
+local golemMonitorTask = nil
+local autoSkillTask = nil
+local autoUltimateTask = nil
+local healthMonitorTask = nil
+
+local lastHealth = 0
+
+local attackHeightMax = 19
+local hitRunHealthThreshold = 600
+
+local bossSafeAnimations = { "idle", "walk", "run", "gethit", "gethit1", "gethit2", "gethit3", "gethit4", "gethit5" }
+local bossDangerKeywords = { "skill1", "skill2", "skill3", "skill4", "skill5", "skill6" }
+local bossRetreatDuration = 3
+local bossNames = { "golem", "spider", "demon king", "demon", "king" }
+
+local safeModeHealthThreshold = 120
+local safeModeHealthDrop = 80
+local safeModeDuration = 30
+
+local blacklistedNames = { "dummy", "helicopter", "heli" }
+
+local prioritiesAvailable = {
+    "Mage Goblin",
+    "Ranged Orc",
+    "Orc",
+    "Spider (Boss)",
+    "Golem (Boss)",
+    "Demon King (Boss)"
+}
+local customPriority = {prioritiesAvailable[1], prioritiesAvailable[2], prioritiesAvailable[3]}
+
+MainTab:CreateLabel("เลือกเป้าหมาย (จัดลำดับสำคัญสุด -> รอง) :")
+
+local PriorityDrop1 = MainTab:CreateDropdown({
+    Name = "อันดับ 1 (สำคัญสุด)",
+    Options = prioritiesAvailable,
+    CurrentOption = {prioritiesAvailable[1]},
+    MultipleOptions = false,
+    Flag = "Priority1",
+    Callback = function(opt)
+        customPriority[1] = opt[1]
+    end,
+})
+local PriorityDrop2 = MainTab:CreateDropdown({
+    Name = "อันดับ 2",
+    Options = prioritiesAvailable,
+    CurrentOption = {prioritiesAvailable[2]},
+    MultipleOptions = false,
+    Flag = "Priority2",
+    Callback = function(opt)
+        customPriority[2] = opt[1]
+    end,
+})
+local PriorityDrop3 = MainTab:CreateDropdown({
+    Name = "อันดับ 3",
+    Options = prioritiesAvailable,
+    CurrentOption = {prioritiesAvailable[3]},
+    MultipleOptions = false,
+    Flag = "Priority3",
+    Callback = function(opt)
+        customPriority[3] = opt[1]
+    end,
+})
+
+local StatusLabel = MainTab:CreateLabel("Status: Idle")
+
+local AutoKillToggle = MainTab:CreateToggle({
+    Name = "🎯 Auto Kill",
+    CurrentValue = false,
+    Flag = "AutoKillToggle",
+    Callback = function(Value)
+        isRunning = Value
+        if isRunning then
+            StatusLabel:Set("Status: ✅ Running")
+            task.spawn(mainLoop)
+        else
+            StatusLabel:Set("Status: 🛑 Stopped")
+            if attackLoop then task.cancel(attackLoop) end
+            if hitRunTask then task.cancel(hitRunTask) end
+            if golemMonitorTask then task.cancel(golemMonitorTask) end
+            if autoSkillTask then task.cancel(autoSkillTask) end
+            if autoUltimateTask then task.cancel(autoUltimateTask) end
+            if floatConnection then floatConnection:Disconnect() end
+            for model, conn in pairs(animationMonitor) do conn:Disconnect() end
+            animationMonitor = {}
+            currentTarget = nil
+            isRetreating = false
+        end
+    end,
+})
+local HitRunToggle = MainTab:CreateToggle({
+    Name = "🏃 Hit & Run (>600 HP)",
+    CurrentValue = false,
+    Flag = "HitRunToggle",
+    Callback = function(Value)
+        isHitAndRun = Value
+    end,
+})
+local DmgSlider = MainTab:CreateSlider({
+    Name = "💥 Damage Multiplier",
+    Range = {1, 10},
+    Increment = 1,
+    Suffix = "x",
+    CurrentValue = 1,
+    Flag = "DmgMultiplier",
+    Callback = function(Value)
+        damageMultiplier = Value
+    end,
+})
+
+-- Skills Tab: AutoSkill Multi-key
+local SkillKeyDropdown = SkillTab:CreateDropdown({
+    Name = "⌨️ เลือก Skill Key (หลายอันก็ได้)",
+    Options = {"1", "2", "3", "F", "X"},
+    CurrentOption = {"1"},
+    MultipleOptions = true,
+    Flag = "SkillKeys",
+    Callback = function(options)
+        selectedSkillKeys = options
+    end,
+})
+local AutoSkillToggle = SkillTab:CreateToggle({
+    Name = "🔥 Auto Skill",
+    CurrentValue = false,
+    Flag = "AutoSkillToggle",
+    Callback = function(Value)
+        isAutoSkill = Value
+        if isAutoSkill then
+            task.spawn(autoSkillLoop)
+        else
+            if autoSkillTask then task.cancel(autoSkillTask) end
+        end
+    end,
+})
+local AutoUltimateToggle = SkillTab:CreateToggle({
+    Name = "⚡ Auto Ultimate (G) on Boss",
+    CurrentValue = false,
+    Flag = "AutoUltimate",
+    Callback = function(Value)
+        isAutoUltimate = Value
+        if isAutoUltimate then
+            task.spawn(autoUltimateLoop)
+        else
+            if autoUltimateTask then task.cancel(autoUltimateTask) end
+        end
+    end,
+})
+SkillTab:CreateLabel("Auto Ultimate activates when targeting Boss")
+
+SafetyTab:CreateToggle({
+    Name = "🛡️ Safe Mode",
+    CurrentValue = false,
+    Flag = "SafeMode",
+    Callback = function(Value)
+        isSafeMode = Value
+        if isSafeMode then
+            task.spawn(healthMonitorLoop)
+        else
+            if healthMonitorTask then task.cancel(healthMonitorTask) end
+        end
+    end,
+})
+SafetyTab:CreateLabel("Escapes for 30s when HP < 120 or drops > 80")
+SafetyTab:CreateButton({
+    Name = "🚨 Emergency Escape NOW",
+    Callback = function()
+        emergencyEscape()
+    end,
+})
+
+local AutoReplayToggle = SettingsTab:CreateToggle({
+    Name = "🔄 Auto Replay",
+    CurrentValue = false,
+    Flag = "AutoReplay",
+    Callback = function(Value)
+        isAutoReplay = Value
+        if isAutoReplay then
+            task.spawn(autoReplayLogic)
+        end
+    end,
+})
+SettingsTab:CreateButton({
+    Name = "💾 Save Config",
+    Callback = function()
+        Rayfield:Notify({
+            Title = "Config Saved",
+            Content = "Your settings have been saved",
+            Duration = 3,
+            Image = 4483362458,
+        })
+    end,
+})
+SettingsTab:CreateButton({
+    Name = "🗑️ Clear Connections",
+    Callback = function()
+        for model, conn in pairs(animationMonitor) do
+            conn:Disconnect()
+        end
+        animationMonitor = {}
+        Rayfield:Notify({
+            Title = "Cleared",
+            Content = "All animation monitors cleared",
+            Duration = 2,
+            Image = 4483362458,
+        })
+    end,
+})
+
+local function pressKey(key)
+    local keyCode = Enum.KeyCode[key]
+    if keyCode then
+        VirtualInputManager:SendKeyEvent(true, keyCode, false, game)
+        task.wait(0.1)
+        VirtualInputManager:SendKeyEvent(false, keyCode, false, game)
+    end
+end
+
+local function getFarEscapePosition(enemyPos)
+    local dist = math.random(400, 900)
+    local randomX = math.random(dist//2, dist) * (math.random(0, 1) == 0 and -1 or 1)
+    local randomY = math.random(120, 170)
+    local randomZ = math.random(dist//2, dist) * (math.random(0, 1) == 0 and -1 or 1)
+    return enemyPos + Vector3.new(randomX, randomY, randomZ)
+end
+
+local numTeleportDuringEscape = 4
+local function runEscapeLoop(duration)
+    isRetreating = true
+    for i=1,numTeleportDuringEscape do
+        local pos = getFarEscapePosition(humanoidRootPart.Position)
+        humanoidRootPart.CFrame = CFrame.new(pos)
+        task.wait(duration/numTeleportDuringEscape)
+    end
+    isRetreating = false
+    StatusLabel:Set("✅ Escape finish, resume attack")
+end
+
+local function isAnimationSafe(animName)
+    local lowerName = string.lower(animName)
+    for _, safe in ipairs(bossSafeAnimations) do
+        if string.find(lowerName, safe) then
+            return true
+        end
+    end
+    for _, danger in ipairs(bossDangerKeywords) do
+        if string.find(lowerName, danger) then
+            return false
+        end
+    end
+    return false
+end
+
+local function isBoss(modelName)
+    local lowerName = string.lower(modelName)
+    for _, bossName in ipairs(bossNames) do
+        if string.find(lowerName, bossName) then
+            return true
+        end
+    end
+    return false
+end
+
+local function setupAnimationMonitor(model)
+    if animationMonitor[model] then
+        animationMonitor[model]:Disconnect()
+        animationMonitor[model] = nil
+    end
+    local hum = model:FindFirstChild("Humanoid")
+    if not hum then return end
+    if not isBoss(model.Name) then return end
+    animationMonitor[model] = hum.AnimationPlayed:Connect(function(track)
+        if not isRunning then return end
+        local animName = track.Name
+        local isSafe = isAnimationSafe(animName)
+        if not isSafe then
+            StatusLabel:Set("⚠️ BOSS SKILL: " .. animName .. "\n🏃 Escaping...")
+            runEscapeLoop(bossRetreatDuration)
+        end
+    end)
+end
+
+local function clearAnimationMonitor(model)
+    if animationMonitor[model] then
+        animationMonitor[model]:Disconnect()
+        animationMonitor[model] = nil
+    end
+end
+local function startBossBackgroundMonitor()
+    if golemMonitorTask then task.cancel(golemMonitorTask) end
+    golemMonitorTask = task.spawn(function()
+        while isRunning do
+            for _, obj in pairs(workspace:GetDescendants()) do
+                if obj:IsA("Model") and obj:FindFirstChild("Humanoid") and obj:FindFirstChild("HumanoidRootPart") then
+                    if isBoss(obj.Name) and obj.Humanoid.Health > 0 then
+                        if not animationMonitor[obj] then
+                            setupAnimationMonitor(obj)
+                        end
+                    end
+                end
+            end
+            task.wait(1)
+        end
+    end)
+end
+
+function autoSkillLoop()
+    autoSkillTask = task.spawn(function()
+        while isAutoSkill and isRunning do
+            if not isRetreating and currentTarget and #selectedSkillKeys > 0 then
+                for i,skill in ipairs(selectedSkillKeys) do
+                    pressKey(skill)
+                    task.wait(0.16)
+                end
+            end
+            task.wait(0.7)
+        end
+    end)
+end
+
+function autoUltimateLoop()
+    autoUltimateTask = task.spawn(function()
+        while isAutoUltimate and isRunning do
+            if not isRetreating and currentTarget and isBoss(currentTarget.Name) then
+                pressKey("G")
+                StatusLabel:Set("⚡ ULTIMATE ACTIVATED!")
+                task.wait(0.5)
+            end
+            task.wait(5)
+        end
+    end)
+end
+
+function emergencyEscape()
+    if safeModeCooldown then return end
+    safeModeCooldown = true
+    isRetreating = true
+    StatusLabel:Set("🚨 EMERGENCY ESCAPE!\n⏱️ Safe for 30s...")
+    Rayfield:Notify({
+        Title = "⚠️ Safe Mode Activated",
+        Content = "Escaping for 30s (random movement)",
+        Duration = 3,
+        Image = 4483362458,
+    })
+    runEscapeLoop(safeModeDuration)
+    safeModeCooldown = false
+    StatusLabel:Set("✅ Safe Mode Complete - Resuming")
+end
+
+function healthMonitorLoop()
+    healthMonitorTask = task.spawn(function()
+        lastHealth = humanoid.Health
+        while isSafeMode and isRunning do
+            local currentHealth = humanoid.Health
+            local healthDrop = lastHealth - currentHealth
+            if currentHealth < safeModeHealthThreshold or healthDrop > safeModeHealthDrop then
+                emergencyEscape()
+            end
+            lastHealth = currentHealth
+            task.wait(0.5)
+        end
+    end)
+end
+
+local otherPriorityOrder = {}
+for _,v in ipairs(prioritiesAvailable) do
+    local found=false
+    for k=1,3 do if customPriority[k]==v then found=true break end end
+    if not found then table.insert(otherPriorityOrder, v) end
+end
+
+local targetClassifyKeys = {
+    ["Mage Goblin"] = function(n) return n:find("mage") and n:find("goblin") end,
+    ["Ranged Orc"] = function(n) return (n:find("range") or n:find("arch")) and n:find("orc") end,
+    ["Orc"] = function(n) return n:find("orc") end,
+    ["Spider (Boss)"] = function(n) return n:find("spider") end,
+    ["Golem (Boss)"] = function(n) return n:find("golem") end,
+    ["Demon King (Boss)"] = function(n) return n:find("demon") or n:find("king") end,
+}
+
+local function isBlacklisted(npcName)
+    local lowerName = string.lower(npcName)
+    for _, blacklisted in pairs(blacklistedNames) do
+        if string.find(lowerName, blacklisted) then
+            return true
+        end
+    end
+    return false
+end
+
+function findBestTarget()
+    otherPriorityOrder = {}
+    for _,v in ipairs(prioritiesAvailable) do
+        local found=false
+        for k=1,3 do if customPriority[k]==v then found=true break end end
+        if not found then table.insert(otherPriorityOrder, v) end
+    end
+    local cache = {}
+    for _,class in ipairs(prioritiesAvailable) do cache[class] = {} end
+    for _, obj in pairs(workspace:GetDescendants()) do
+        if obj:IsA("Model") and obj ~= character and obj:FindFirstChild("Humanoid") and obj:FindFirstChild("HumanoidRootPart") then
+            if obj.Humanoid.Health > 0 and not Players:GetPlayerFromCharacter(obj) then
+                local name = string.lower(obj.Name)
+                if not isBlacklisted(name) then
+                    for k,class in ipairs(prioritiesAvailable) do
+                        if targetClassifyKeys[class] and targetClassifyKeys[class](name) then
+                            table.insert(cache[class], obj)
+                            break
+                        end
+                    end
+                end
+            end
+        end
+    end
+    local function getClosest(list)
+        local minDist, clo = math.huge, nil
+        for _, npc in ipairs(list) do
+            local dist = (humanoidRootPart.Position - npc.HumanoidRootPart.Position).Magnitude
+            if dist < minDist then minDist = dist; clo = npc end
+        end
+        return clo
+    end
+    for i=1,3 do
+        local target = getClosest(cache[customPriority[i]])
+        if target then return target, customPriority[i] end
+    end
+    for _,v in ipairs(otherPriorityOrder) do
+        local target = getClosest(cache[v])
+        if target then return target, v end
+    end
+    return nil, "None"
+end
+
+local function attackCombo()
+    local bridgeNet = ReplicatedStorage:FindFirstChild("BridgeNet2")
+    if not bridgeNet then return end
+    local dataRemote = bridgeNet:WaitForChild("dataRemoteEvent")
+    while isRunning do
+        if not isRetreating then
+            for m = 1, damageMultiplier do
+                local args2 = { { { state = Enum.HumanoidStateType.Running, hitcount = 2 }, "\f" } }
+                local args3 = { { { state = Enum.HumanoidStateType.Running, hitcount = 3 }, "\f" } }
+                local args4 = { { { state = Enum.HumanoidStateType.Running, hitcount = 4 }, "\f" } }
+                pcall(function() dataRemote:FireServer(unpack(args2)) end)
+                pcall(function() dataRemote:FireServer(unpack(args3)) end)
+                pcall(function() dataRemote:FireServer(unpack(args4)) end)
+            end
+        end
+        task.wait(0.1)
+    end
+end
+
+local function calculateSafeHeight(model)
+    if not model then return 12 end
+    local size = model:GetExtentsSize()
+    local height = size.Y * 1.5
+    return math.clamp(height, 8, attackHeightMax)
+end
+
+local function startPositionLogic()
+    if floatConnection then floatConnection:Disconnect() end
+    local angle = 0
+    local escapePosition = nil
+    floatConnection = RunService.Heartbeat:Connect(function()
+        if not isRunning then return end
+        if not character or not humanoidRootPart then return end
+        local targetPos = nil
+        if currentTarget and currentTarget:FindFirstChild("HumanoidRootPart") then
+            local enemyRoot = currentTarget.HumanoidRootPart
+            local safeHeight = calculateSafeHeight(currentTarget)
+            if isRetreating then
+                if not escapePosition then
+                    escapePosition = getFarEscapePosition(enemyRoot.Position)
+                end
+                targetPos = CFrame.new(escapePosition)
+            else
+                escapePosition = nil
+                local name = string.lower(currentTarget.Name)
+                local isRangedTarget = name:find("range") or name:find("mage")
+                if isRangedTarget then
+                    angle = angle + 0.1
+                    local radius = 8
+                    local offsetX = math.cos(angle) * radius
+                    local offsetZ = math.sin(angle) * radius
+                    targetPos = CFrame.new(enemyRoot.Position + Vector3.new(offsetX, safeHeight, offsetZ), enemyRoot.Position)
+                else
+                    targetPos = CFrame.new(enemyRoot.Position + Vector3.new(0, safeHeight, 0), enemyRoot.Position)
+                end
+            end
+        else
+            escapePosition = nil
+            targetPos = CFrame.new(humanoidRootPart.Position)
+        end
+        if targetPos then
+            humanoidRootPart.CFrame = targetPos
+            humanoidRootPart.Velocity = Vector3.new(0,0,0)
+        end
+    end)
+end
+
+local function manageHitAndRun()
+    if hitRunTask then task.cancel(hitRunTask) end
+    isRetreating = false
+    if not isHitAndRun or not currentTarget then return end
+    local hp = currentTarget.Humanoid.Health
+    if hp > hitRunHealthThreshold then
+        hitRunTask = task.spawn(function()
+            while isRunning and currentTarget and currentTarget.Humanoid.Health > 0 do
+                StatusLabel:Set("⚔️ Attacking (Hit & Run Mode)...")
+                isRetreating = false
+                task.wait(2.5)
+                if not isRunning or not currentTarget then break end
+                StatusLabel:Set("🏃 Retreating (Cooling down)...")
+                isRetreating = true
+                task.wait(1.5)
+            end
+            isRetreating = false
+        end)
+    end
+end
+
+function mainLoop()
+    startPositionLogic()
+    attackLoop = task.spawn(attackCombo)
+    startBossBackgroundMonitor()
+    while isRunning do
+        if not currentTarget or not currentTarget.Parent or currentTarget.Humanoid.Health <= 0 then
+            if currentTarget then
+                if not isBoss(currentTarget.Name) then
+                    clearAnimationMonitor(currentTarget)
+                end
+            end
+            if hitRunTask then task.cancel(hitRunTask) end
+            isRetreating = false
+            local target, typeStr = findBestTarget()
+            if target then
+                currentTarget = target
+                StatusLabel:Set("🎯 LOCKED: " .. target.Name .. "\n[" .. typeStr .. "]")
+                if isBoss(target.Name) then
+                    setupAnimationMonitor(target)
+                end
+                manageHitAndRun()
+            else
+                StatusLabel:Set("🔍 Searching...")
+                currentTarget = nil
+            end
+        end
+        task.wait(0.1)
+    end
+end
+
+function autoReplayLogic()
+    while isAutoReplay do
+        local gui = player:WaitForChild("PlayerGui")
+        for _, v in pairs(gui:GetDescendants()) do
+            if v:IsA("TextButton") and (string.find(string.lower(v.Name), "replay") or string.find(string.lower(v.Text), "replay")) then
+                if firesignal then firesignal(v.MouseButton1Click)
+                else for _, c in pairs(getconnections(v.MouseButton1Click)) do c:Fire() end end
+                task.wait(3)
+            end
+        end
+        task.wait(1)
+    end
+end
+
+humanoid.Died:Connect(function()
+    if isRunning then
+        task.wait(4)
+        character = player.Character or player.CharacterAdded:Wait()
+        humanoidRootPart = character:WaitForChild("HumanoidRootPart")
+        humanoid = character:WaitForChild("Humanoid")
+    end
+end)
+
+Rayfield:LoadConfiguration()
+print("✅ Anime Final Quest⚡ Loaded!")
